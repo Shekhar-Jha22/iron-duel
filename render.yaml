@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: iron-duel
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/maps
+    envVars:
+      - key: TANK_SECRET
+        generateValue: true

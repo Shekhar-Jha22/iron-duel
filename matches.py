@@ -1,0 +1,215 @@
+import threading
+import time
+import uuid
+
+import numpy as np
+
+from env import MiniMilitiaEnv
+from maps import MAPS
+from rewards import REWARDS
+
+TICK_S = 0.08              # human-vs-human server tick (matches the client's normal speed)
+PVP_COUNTDOWN_S = 3
+INPUT_TIMEOUT_S = 15       # no input for this long → forfeit
+QUEUE_TIMEOUT_S = 30       # waiting player who stopped polling is dropped (hidden tabs poll slowly)
+MATCH_TTL_S = 15 * 60      # finished/abandoned matches are purged after this
+IDLE_ACTION = np.zeros(3, dtype=np.int64)
+
+
+def sanitize_action(raw):
+    try:
+        move, aim, shoot = (int(v) for v in raw)
+    except (TypeError, ValueError):
+        return IDLE_ACTION.copy()
+    return np.array([min(max(move, 0), 8), min(max(aim, 0), 15), 1 if shoot else 0], dtype=np.int64)
+
+
+def match_winner(info, a0_name, a1_name):
+    """0 / 1 / None (draw). A timeout with both alive counts as a loss for a PPO side."""
+    if info["p0_alive"] and not info["p1_alive"]:
+        return 0
+    if info["p1_alive"] and not info["p0_alive"]:
+        return 1
+    ppo0, ppo1 = a0_name == "ppo", a1_name == "ppo"
+    if ppo0 != ppo1:
+        return 1 if ppo0 else 0
+    if ppo0 and ppo1:
+        return None
+    if info["p0_health"] == info["p1_health"]:
+        return None
+    return 0 if info["p0_health"] > info["p1_health"] else 1
+
+
+class Match:
+    """seats[i] = user id of a human seat or None for an AI seat; agents[i] = AI agent or None."""
+
+    def __init__(self, kind, map_id, seats, agents, labels, names, owner=None):
+        self.id = uuid.uuid4().hex[:12]
+        self.kind = kind
+        self.map_id = map_id
+        self.seats = seats
+        self.agents = agents
+        self.labels = labels
+        self.names = names
+        self.owner = owner
+        self.env = MiniMilitiaEnv(map_cfg=MAPS[map_id], reward_fn=REWARDS[map_id]())
+        obs0, _ = self.env.reset()
+        self.obs = [obs0, self.env._get_obs(1)]
+        self.inputs = [IDLE_ACTION.copy(), IDLE_ACTION.copy()]
+        now = time.time()
+        self.last_input = [now, now]
+        self.touched = now
+        self.start_at = now + PVP_COUNTDOWN_S if kind == "pvp" else now
+        self.done = False
+        self.result = None
+        self.lock = threading.Lock()
+
+    def seat_of(self, uid):
+        return self.seats.index(uid) if uid in self.seats else None
+
+    def _finish(self, winner, steps, reason):
+        self.done = True
+        self.result = {"winner": winner, "steps": steps, "reason": reason,
+                       "agent0": self.labels[0], "agent1": self.labels[1], "map_id": self.map_id}
+
+    def step(self, human_actions=None):
+        with self.lock:
+            if self.done:
+                return
+            state = self.env.get_full_state()
+            actions = []
+            for i, agent in enumerate(self.agents):
+                if agent is None:
+                    actions.append(human_actions[i] if human_actions else self.inputs[i])
+                    continue
+                try:
+                    actions.append(agent.get_action(self.obs[i], state))
+                except Exception as e:
+                    print(f"ERROR: agent {i} in match {self.id} failed: {e}")
+                    actions.append(IDLE_ACTION.copy())
+            obs0, _, terminated, truncated, info = self.env.step(actions)
+            self.obs = [obs0, self.env._get_obs(1)]
+            if terminated or truncated:
+                self._finish(match_winner(info, *self.labels), info["step"], "combat")
+
+    def forfeit(self, seat, reason):
+        with self.lock:
+            if not self.done:
+                self._finish(1 - seat, self.env.step_count, reason)
+
+    def snapshot(self, seat=None):
+        with self.lock:
+            return {
+                "match_id": self.id,
+                "kind": self.kind,
+                "map_id": self.map_id,
+                "seat": seat,
+                "players": self.names,
+                "state": self.env.get_full_state(),
+                "done": self.done,
+                "starts_in": max(0.0, round(self.start_at - time.time(), 1)),
+                "match_info": self.result,
+            }
+
+
+class MatchManager:
+    def __init__(self):
+        self.matches = {}
+        self.waiting = {}   # uid → {"map_id", "name", "ts", "match_id", "seat"}
+        self.lock = threading.Lock()
+        threading.Thread(target=self._tick_loop, daemon=True).start()
+
+    # ── matches ───────────────────────────────────────────────────────────
+    def add(self, match):
+        with self.lock:
+            self.matches[match.id] = match
+        return match
+
+    def get(self, match_id):
+        with self.lock:
+            m = self.matches.get(match_id)
+        if m is not None:
+            m.touched = time.time()
+        return m
+
+    def remove(self, match_id):
+        with self.lock:
+            self.matches.pop(match_id, None)
+
+    def _tick_loop(self):
+        while True:
+            start = time.time()
+            with self.lock:
+                live = [m for m in self.matches.values()
+                    if m.kind == "pvp" and not m.done and start >= m.start_at]
+            for m in live:
+                for seat in (0, 1):
+                    if start - m.last_input[seat] > INPUT_TIMEOUT_S:
+                        m.forfeit(seat, "disconnect")
+                m.step()
+            self._purge(start)
+            time.sleep(max(0.0, TICK_S - (time.time() - start)))
+
+    def _purge(self, now):
+        with self.lock:
+            for mid in [mid for mid, m in self.matches.items() if now - m.touched > MATCH_TTL_S]:
+                del self.matches[mid]
+            for uid in [u for u, w in self.waiting.items() if self._stale(w, now)]:
+                del self.waiting[uid]
+
+    def _stale(self, w, now):
+        if w["match_id"] is None:
+            return now - w["ts"] > QUEUE_TIMEOUT_S
+        m = self.matches.get(w["match_id"])
+        return m is None or m.done
+
+    # ── matchmaking ───────────────────────────────────────────────────────
+    # A matched entry stays in `waiting` until its match ends, so join/status keep
+    # returning the match to both players even if one response was lost.
+    def join_queue(self, user, map_id):
+        uid = user["id"]
+        with self.lock:
+            mine = self.waiting.get(uid)
+            if mine and mine["match_id"]:
+                if mine["map_id"] == map_id and not self._stale(mine, time.time()):
+                    return self._matched(mine)
+                del self.waiting[uid]
+            opponent = next((u for u, w in self.waiting.items()
+                             if u != uid and w["map_id"] == map_id and w["match_id"] is None), None)
+            if opponent is None:
+                self.waiting[uid] = {"map_id": map_id, "name": user["name"], "ts": time.time(),
+                                     "match_id": None, "seat": None}
+                return {"status": "waiting"}
+            opp = self.waiting[opponent]
+            match = Match("pvp", map_id, seats=[opponent, uid], agents=[None, None],
+                          labels=["human", "human"], names=[opp["name"], user["name"]])
+            self.matches[match.id] = match
+            opp.update(match_id=match.id, seat=0, ts=time.time())
+            self.waiting[uid] = {"map_id": map_id, "name": user["name"], "ts": time.time(),
+                                 "match_id": match.id, "seat": 1}
+            return self._matched(self.waiting[uid])
+
+    def queue_status(self, user):
+        uid = user["id"]
+        with self.lock:
+            mine = self.waiting.get(uid)
+            if mine is None or self._stale(mine, time.time()):
+                self.waiting.pop(uid, None)
+                return {"status": "idle"}
+            if mine["match_id"]:
+                return self._matched(mine)
+            mine["ts"] = time.time()
+            return {"status": "waiting",
+                    "players_waiting": sum(1 for w in self.waiting.values() if w["match_id"] is None)}
+
+    def _matched(self, w):
+        m = self.matches.get(w["match_id"])
+        if m is not None:
+            m.last_input[w["seat"]] = time.time()
+        return {"status": "matched", "match_id": w["match_id"], "seat": w["seat"]}
+
+    def leave_queue(self, user):
+        with self.lock:
+            w = self.waiting.get(user["id"])
+            if w is not None and w["match_id"] is None:
+                del self.waiting[user["id"]]
