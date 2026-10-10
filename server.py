@@ -1,8 +1,10 @@
+import json
 import os
-import time
 import numpy as np
 from flask import Flask, g, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_sock import Sock
+from simple_websocket import ConnectionClosed
 
 from env import MiniMilitiaEnv
 from maps import MAPS
@@ -21,12 +23,13 @@ from agents import (
 from agents.numpy_policy import NumpyPolicy
 from observations import OBS_DIM
 from rewards import REWARDS
-from auth import login_required, register_auth_routes
-from matches import Match, MatchManager, match_winner, sanitize_action
+from auth import login_required, register_auth_routes, verify_token
+from matches import TICK_S, Match, MatchManager, match_winner
 
 app = Flask(__name__)
 CORS(app)
 register_auth_routes(app)
+sock = Sock(app)
 manager = MatchManager()
 
 AGENT_REGISTRY = {
@@ -121,7 +124,7 @@ def _owned_match(match_id):
     if m is None:
         return None, None, (jsonify({"error": "Match not found."}), 404)
     seat = m.seat_of(g.user["id"])
-    if seat is None and m.owner != g.user["id"]:
+    if not m.can_view(g.user["id"]):
         return None, None, (jsonify({"error": "Not your match."}), 403)
     return m, seat, None
 
@@ -147,10 +150,11 @@ def start_match():
         a0, a1 = data.get("agent0", "ppo"), data.get("agent1", "random")
         if a0 not in valid or a1 not in valid:
             return jsonify({"error": "Unknown agent."}), 400
+        tick_ms = min(max(int(data.get("tick_ms", 80)), 30), 200)
         match = Match(mode, map_id, seats=[None, None],
                       agents=[_make_agent(a0, map_id, team=0, opponent=a1),
                               _make_agent(a1, map_id, team=1, opponent=a0)],
-                      labels=[a0, a1], names=[a0, a1], owner=user["id"])
+                      labels=[a0, a1], names=[a0, a1], owner=user["id"], tick_s=tick_ms / 1000)
         seat = None
     else:
         return jsonify({"error": "Unknown mode."}), 400
@@ -158,35 +162,42 @@ def start_match():
     return jsonify(match.snapshot(seat))
 
 
-@app.post("/api/match/<match_id>/step")
-@login_required
-def step_match(match_id):
-    m, seat, err = _owned_match(match_id)
-    if err:
-        return err
-    if m.kind == "pvp":
-        return jsonify({"error": "Live matches advance on the server; send /input."}), 400
-    data = request.get_json(silent=True) or {}
-    actions = [None, None]
-    if seat is not None:
-        actions[seat] = sanitize_action(data.get("human_action"))
-    m.step(actions)
-    return jsonify(m.snapshot(seat))
-
-
-@app.post("/api/match/<match_id>/input")
-@login_required
-def match_input(match_id):
-    m, seat, err = _owned_match(match_id)
-    if err:
-        return err
-    if seat is None:
-        return jsonify({"error": "Spectators can't send input."}), 403
-    data = request.get_json(silent=True) or {}
-    with m.lock:
-        m.inputs[seat] = sanitize_action(data.get("action"))
-        m.last_input[seat] = time.time()
-    return jsonify(m.snapshot(seat))
+@sock.route("/api/match/<match_id>/ws")
+def match_ws(ws, match_id):
+    """Push a snapshot every tick; receive {"action": [...]}, {"ping": 1} or {"tick_ms": n}.
+    The first client message must be {"token": ...} so credentials never appear in URLs."""
+    try:
+        user = verify_token(json.loads(ws.receive(timeout=10) or "{}").get("token"))
+    except (ValueError, AttributeError, ConnectionClosed):
+        return
+    m = manager.get(match_id)
+    if user is None or m is None or not m.can_view(user["id"]):
+        err = "Please log in again." if user is None else "Match not found." if m is None else "Not your match."
+        ws.send(json.dumps({"error": err}))
+        return
+    seat = m.seat_of(user["id"])
+    seen = -1
+    try:
+        while True:
+            while (raw := ws.receive(timeout=0)) is not None:
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue
+                if seat is not None and "action" in msg:
+                    m.set_input(seat, msg["action"])
+                elif m.kind == "sim" and "tick_ms" in msg:
+                    m.tick_s = min(max(int(msg["tick_ms"]), 30), 200) / 1000
+                m.heartbeat(seat)
+            version = m.wait_for_update(seen, timeout=TICK_S * 2)
+            if version != seen:
+                seen = version
+                snap = m.snapshot(seat)
+                ws.send(json.dumps(snap, separators=(",", ":")))
+                if snap["done"]:
+                    break
+    except ConnectionClosed:
+        pass
 
 
 @app.post("/api/match/<match_id>/leave")
@@ -195,7 +206,7 @@ def leave_match(match_id):
     m, seat, err = _owned_match(match_id)
     if err:
         return err
-    if m.kind == "pvp" and seat is not None:
+    if m.kind == "pvp" and seat is not None and not m.done:
         m.forfeit(seat, "left")
     else:
         manager.remove(m.id)

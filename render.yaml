@@ -3,6 +3,7 @@ services:
     name: iron-duel
     runtime: docker
     plan: free
+    region: singapore
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/maps
     envVars:

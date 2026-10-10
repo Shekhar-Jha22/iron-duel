@@ -5,6 +5,7 @@ class PPOAgent:
     """PPO agent that can load trained models or act randomly as fallback"""
     name = "PPO"
     color = "#22c55e"
+    uses_obs = True
 
     def __init__(self, model=None, deterministic=False, team=0):
         self.model = model

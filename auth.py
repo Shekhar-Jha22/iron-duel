@@ -51,14 +51,18 @@ def _session(user):
     return {"token": _serializer.dumps(user), "user": user}
 
 
-def current_user():
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
+def verify_token(token):
+    if not isinstance(token, str) or not token:
         return None
     try:
-        return _serializer.loads(header[7:], max_age=TOKEN_MAX_AGE)
+        return _serializer.loads(token, max_age=TOKEN_MAX_AGE)
     except (BadSignature, SignatureExpired):
         return None
+
+
+def current_user():
+    header = request.headers.get("Authorization", "")
+    return verify_token(header[7:]) if header.startswith("Bearer ") else None
 
 
 def login_required(fn):

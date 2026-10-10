@@ -14,4 +14,4 @@ ENV PORT=10000 PYTHONUNBUFFERED=1 BENCH_MAX_EPISODES=20
 EXPOSE 10000
 
 # One worker: matches and the matchmaking queue live in this process's memory.
-CMD gunicorn --workers 1 --threads 16 --timeout 300 --bind 0.0.0.0:${PORT} server:app
+CMD gunicorn --workers 1 --threads 64 --timeout 300 --bind 0.0.0.0:${PORT} server:app

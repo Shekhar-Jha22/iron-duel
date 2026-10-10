@@ -3,3 +3,4 @@ gymnasium==0.29.1
 flask>=3.0
 flask-cors>=4.0
 gunicorn>=22.0
+flask-sock>=0.7
