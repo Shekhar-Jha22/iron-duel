@@ -139,8 +139,14 @@ def start_match():
         return jsonify({"error": "Unknown map."}), 400
     valid = _valid_agents(map_id)
     user = g.user
-    if mode in ("bot", "rl"):
-        opp = "ppo" if mode == "rl" else data.get("opponent", "random")
+    if mode == "rl":
+        # The policy was trained as player 0; on asymmetric maps its mirrored player-1 view is weaker.
+        match = Match(mode, map_id, seats=[None, user["id"]],
+                      agents=[_make_agent("ppo", map_id, team=0, opponent="human"), None],
+                      labels=["ppo", "human"], names=["ppo", user["name"]])
+        seat = 1
+    elif mode == "bot":
+        opp = data.get("opponent", "random")
         if opp not in valid:
             return jsonify({"error": "Unknown opponent."}), 400
         match = Match(mode, map_id, seats=[user["id"], None],
