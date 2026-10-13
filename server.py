@@ -57,7 +57,7 @@ def _ppo_checkpoint(map_id, opponent):
     """Stage checkpoint trained against `opponent`; self-play checkpoint for human/ppo/unknown."""
     d, v = f"models/{map_id}", PPO_VARIATION
     stages = STAGE_NAMES[map_id]
-    selfplay = [f"{d}/final_{v}.npz", f"{d}/{v}_stage_{len(stages) - 1}_final.npz"]
+    selfplay = [f"{d}/{v}_stage_{len(stages) - 1}_final.npz", f"{d}/final_{v}.npz"]
     cands = []
     # "random" is a ~0-2% warm-up stage, so its checkpoint is undertrained → use self-play
     if opponent in stages and opponent not in ("selfplay", "random"):
@@ -79,7 +79,8 @@ def _policy(path):
 
 def _load_ppo(map_id, opponent, team):
     agent = PPOAgent(team=team)
-    path = _ppo_checkpoint(map_id, _effective_name(opponent, map_id))
+    # path = _ppo_checkpoint(map_id, _effective_name(opponent, map_id))
+    path = "models/map2/v1_stage_8_final.npz"
     if path is None:
         print(f"⚠ No PPO checkpoint for {map_id} (run tools/export_policies.py)")
         return agent
