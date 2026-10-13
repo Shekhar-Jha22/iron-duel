@@ -25,6 +25,9 @@ class ShapedReward(BaseReward):
     # ── time pressure (per frame, non-potential on purpose) ───────────────
     R_STEP       = -0.01   # every frame both are alive
     R_DIST       = -0.02   # × dist/diag every frame → being far costs more
+    # Tiny per-frame bonus for keeping the turret on target even when not firing, so the
+    # aim head stops idling randomly. Kept below |R_STEP| so it can never pay for stalling.
+    R_AIM_TRACK  =  0.004  # × cos⁴(aim error): lead angle with LOS, direct bearing behind cover
     # Victim is also charged the remaining frames at the max rate, so dying
     # early is never cheaper than surviving: kill > timeout > death.
     # Immediate credit at fire time (hit reward lands ~40 ticks later).
@@ -107,6 +110,17 @@ class ShapedReward(BaseReward):
             phi += self.W_TACTIC * los * (1.0 if armed else -1.0)
         return phi
 
+    @staticmethod
+    def _aim_quality(player, opponent, obstacles):
+        """cos⁴ of the turret's error: ~1 on target, ~0.73 one aim step (22.5°) off, ~0.25 at 45°."""
+        has_los = not obstacles or has_line_of_sight(player.x, player.y, opponent.x, opponent.y, obstacles)
+        if has_los:
+            target = lead_angle(player.x, player.y, opponent.x, opponent.y, opponent.vx, opponent.vy)
+        else:
+            target = math.atan2(opponent.y - player.y, opponent.x - player.x)
+        c = math.cos(wrap(target - player.aim_angle))
+        return c ** 4 if c > 0 else 0.0
+
     def per_tick(self, agent_idx, player, opponent, bullets, obstacles):
         if player.alive and opponent.alive:
             phi = self.potential(player, opponent, bullets, obstacles)
@@ -115,6 +129,8 @@ class ShapedReward(BaseReward):
                 diag = math.hypot(self.env.map.width, self.env.map.height)
                 dist = math.hypot(opponent.x - player.x, opponent.y - player.y)
                 self.rewards[agent_idx] += self.R_DIST * dist / diag
+            if self.R_AIM_TRACK:
+                self.rewards[agent_idx] += self.R_AIM_TRACK * self._aim_quality(player, opponent, obstacles)
             if player.shoot_cd == SHOOT_COOLDOWN:   # fired this tick
                 good = shot_on_target(player, opponent, obstacles)
                 self.rewards[agent_idx] += self.R_SHOT_GOOD if good else self.R_SHOT_BAD
