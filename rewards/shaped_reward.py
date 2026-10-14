@@ -2,7 +2,7 @@ import math
 
 from .base_reward import BaseReward
 from observations import (
-    lead_angle, wrap, bullet_threats, shot_on_target, SHOOT_COOLDOWN,
+    lead_angle, wrap, bullet_threats, shot_on_target, SHOOT_COOLDOWN, BULLET_SPEED,
 )
 from utils import has_line_of_sight
 
@@ -93,7 +93,7 @@ class ShapedReward(BaseReward):
         los = 1.0 if (not obstacles or
                       has_line_of_sight(player.x, player.y, opponent.x, opponent.y, obstacles)) else 0.0
 
-        lead = lead_angle(player.x, player.y, opponent.x, opponent.y, opponent.vx, opponent.vy)
+        lead = lead_angle(player.x, player.y, opponent.x, opponent.y, opponent.vx, opponent.vy, self._bs())
         phi = self.W_AIM * los * max(0.0, math.cos(wrap(lead - player.aim_angle)))
 
         if self.env is not None:
@@ -110,12 +110,15 @@ class ShapedReward(BaseReward):
             phi += self.W_TACTIC * los * (1.0 if armed else -1.0)
         return phi
 
+    def _bs(self):
+        return getattr(self.env, "bullet_speed", BULLET_SPEED)
+
     @staticmethod
-    def _aim_quality(player, opponent, obstacles):
+    def _aim_quality(player, opponent, obstacles, speed=BULLET_SPEED):
         """cos⁴ of the turret's error: ~1 on target, ~0.73 one aim step (22.5°) off, ~0.25 at 45°."""
         has_los = not obstacles or has_line_of_sight(player.x, player.y, opponent.x, opponent.y, obstacles)
         if has_los:
-            target = lead_angle(player.x, player.y, opponent.x, opponent.y, opponent.vx, opponent.vy)
+            target = lead_angle(player.x, player.y, opponent.x, opponent.y, opponent.vx, opponent.vy, speed)
         else:
             target = math.atan2(opponent.y - player.y, opponent.x - player.x)
         c = math.cos(wrap(target - player.aim_angle))
@@ -130,9 +133,9 @@ class ShapedReward(BaseReward):
                 dist = math.hypot(opponent.x - player.x, opponent.y - player.y)
                 self.rewards[agent_idx] += self.R_DIST * dist / diag
             if self.R_AIM_TRACK:
-                self.rewards[agent_idx] += self.R_AIM_TRACK * self._aim_quality(player, opponent, obstacles)
+                self.rewards[agent_idx] += self.R_AIM_TRACK * self._aim_quality(player, opponent, obstacles, self._bs())
             if player.shoot_cd == SHOOT_COOLDOWN:   # fired this tick
-                good = shot_on_target(player, opponent, obstacles)
+                good = shot_on_target(player, opponent, obstacles, self._bs())
                 self.rewards[agent_idx] += self.R_SHOT_GOOD if good else self.R_SHOT_BAD
                 if self.R_SHOT_BLIND and obstacles and not has_line_of_sight(
                         player.x, player.y, opponent.x, opponent.y, obstacles):

@@ -47,10 +47,10 @@ def to_world_action(action, agent_idx):
 
 # ── Shared geometry (also used by reward shaping) ───────────────────────────
 
-def lead_angle(px, py, ox, oy, ovx, ovy):
+def lead_angle(px, py, ox, oy, ovx, ovy, speed=BULLET_SPEED):
     """Angle to fire so a bullet intercepts a constant-velocity target."""
     dx, dy = ox - px, oy - py
-    a = ovx * ovx + ovy * ovy - BULLET_SPEED * BULLET_SPEED
+    a = ovx * ovx + ovy * ovy - speed * speed
     b = 2.0 * (dx * ovx + dy * ovy)
     c = dx * dx + dy * dy
     t = 0.0
@@ -73,10 +73,10 @@ def wrap(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
-def shot_on_target(p, opp, obstacles):
+def shot_on_target(p, opp, obstacles, speed=BULLET_SPEED):
     """Would a bullet fired now along the current aim hit opp (constant velocity)?"""
     ax, ay = math.cos(p.aim_angle), math.sin(p.aim_angle)
-    wx, wy = ax * BULLET_SPEED - opp.vx, ay * BULLET_SPEED - opp.vy
+    wx, wy = ax * speed - opp.vx, ay * speed - opp.vy
     dx, dy = opp.x - p.x, opp.y - p.y
     ww = wx * wx + wy * wy
     if ww < 1e-9:
@@ -86,8 +86,8 @@ def shot_on_target(p, opp, obstacles):
         return 0.0
     if math.hypot(wx * t - dx, wy * t - dy) > HIT_R:
         return 0.0
-    if obstacles and not has_line_of_sight(p.x, p.y, p.x + ax * BULLET_SPEED * t,
-                                           p.y + ay * BULLET_SPEED * t, obstacles):
+    if obstacles and not has_line_of_sight(p.x, p.y, p.x + ax * speed * t,
+                                           p.y + ay * speed * t, obstacles):
         return 0.0
     return 1.0
 
@@ -156,7 +156,8 @@ def build_observation(env, agent_idx, _c=None):
     # opponent aim threat: cos between opp's aim and opp→self direction
     threat_aim = (math.cos(opp.aim_angle) * -dx + math.sin(opp.aim_angle) * -dy) / dist
 
-    lead = lead_angle(p.x, p.y, opp.x, opp.y, opp.vx, opp.vy)
+    bs = getattr(env, "bullet_speed", BULLET_SPEED)
+    lead = lead_angle(p.x, p.y, opp.x, opp.y, opp.vx, opp.vy, bs)
     err = wrap(lead - p.aim_angle)   # rotation-invariant
 
     o = np.zeros(OBS_DIM, dtype=np.float32)
@@ -177,7 +178,7 @@ def build_observation(env, agent_idx, _c=None):
     o[22:28] = (
         sg * math.cos(lead), sg * math.sin(lead),
         math.cos(err), math.sin(err),
-        shot_on_target(p, opp, obstacles),
+        shot_on_target(p, opp, obstacles, bs),
         1.0 if (p.ammo > 0 and p.shoot_cd == 0) else 0.0,
     )
 
@@ -187,7 +188,7 @@ def build_observation(env, agent_idx, _c=None):
         o[i:i + BULLET_FEATS] = (
             1.0,
             sg * rx / BULLET_LOCAL, sg * ry / BULLET_LOCAL,
-            sg * bvx / BULLET_SPEED, sg * bvy / BULLET_SPEED,
+            sg * bvx / bs, sg * bvy / bs,
             t / 30.0, miss / 150.0,
         )
         i += BULLET_FEATS

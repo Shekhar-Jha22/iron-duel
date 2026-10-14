@@ -67,6 +67,7 @@ class Bullet:
         self.alive = True
 
     def step(self, arena_w, arena_h, obstacles):
+        self.px, self.py = self.x, self.y
         self.x += self.vx
         self.y += self.vy
         if not (0 <= self.x <= arena_w and 0 <= self.y <= arena_h):
@@ -75,6 +76,14 @@ class Bullet:
             if bullet_hits_obstacle(self.x, self.y, BULLET_RADIUS, obs):
                 self.alive = False
                 break
+
+def _swept_dist(b, target):
+    """Closest distance from target to the bullet's path this tick (no tunnelling at high speed)."""
+    sx, sy = b.x - b.px, b.y - b.py
+    ss = sx * sx + sy * sy
+    t = 0.0 if ss == 0 else min(1.0, max(0.0, ((target.x - b.px) * sx + (target.y - b.py) * sy) / ss))
+    return math.hypot(b.px + sx * t - target.x, b.py + sy * t - target.y)
+
 
 class MiniMilitiaEnv(gym.Env):
     metadata = {"render_modes": ["none"]}
@@ -90,6 +99,7 @@ class MiniMilitiaEnv(gym.Env):
         # Use per-map speed/accel if defined, else fall back to globals
         self.max_speed = getattr(self.map, "max_speed", MAX_SPEED)
         self.accel     = getattr(self.map, "accel",     ACCEL)
+        self.bullet_speed = getattr(self.map, "bullet_speed", BULLET_SPEED)
 
         self.observation_space = spaces.Box(
             low=-1.0,
@@ -155,8 +165,8 @@ class MiniMilitiaEnv(gym.Env):
             if shoot and player.ammo > 0 and player.shoot_cd == 0:
                 player.ammo -= 1
                 player.shoot_cd = SHOOT_COOLDOWN
-                bvx = math.cos(player.aim_angle) * BULLET_SPEED
-                bvy = math.sin(player.aim_angle) * BULLET_SPEED
+                bvx = math.cos(player.aim_angle) * self.bullet_speed
+                bvy = math.sin(player.aim_angle) * self.bullet_speed
                 self.bullets.append(Bullet(player.x, player.y, bvx, bvy, owner_team=player.team))
 
         for bullet in self.bullets:
@@ -169,8 +179,7 @@ class MiniMilitiaEnv(gym.Env):
             for j, target in enumerate(self.players):
                 if not target.alive or target.team == bullet.owner_team:
                     continue
-                dist = math.hypot(bullet.x - target.x, bullet.y - target.y)
-                if dist < PLAYER_RADIUS + BULLET_RADIUS:
+                if _swept_dist(bullet, target) < PLAYER_RADIUS + BULLET_RADIUS:
                     target.health -= BULLET_DAMAGE
                     bullet.alive = False
                     self.reward_fn.on_hit(bullet.owner_team, j)
@@ -223,6 +232,7 @@ class MiniMilitiaEnv(gym.Env):
         return {
             "arena": {"w": self.map.width, "h": self.map.height},
             "map_id": self.map.name,
+            "bullet_speed": self.bullet_speed,
             "obstacles": [
                 {"x": o.x, "y": o.y, "w": o.w, "h": o.h, "type": o.type}
                 for o in self.map.obstacles
@@ -233,6 +243,7 @@ class MiniMilitiaEnv(gym.Env):
                     "vx": p.vx, "vy": p.vy,
                     "health": p.health,
                     "ammo": p.ammo,
+                    "shoot_cd": p.shoot_cd,
                     "aim_angle": p.aim_angle,
                     "alive": p.alive,
                     "team": p.team,

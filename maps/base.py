@@ -22,5 +22,6 @@ class MapConfig:
     player_spawn: Spawn
     enemy_spawn: Spawn
     obstacles: List[Obstacle]
-    max_speed: float = 5.0   # add this
-    accel: float = 1.2 
+    max_speed: float = 5.0
+    accel: float = 1.2
+    bullet_speed: float = 12.0 

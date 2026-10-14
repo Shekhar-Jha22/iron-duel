@@ -9,6 +9,7 @@ from .rule_map2 import (
     StationaryAgent, SlowWalkerAgent, AggressiveWalkerAgent,
     EasyStraferAgent, SimpleHiderAgent,
     DefensiveHiderAgent, MobileDefenseAgent,
+    DodgerAgent, SniperAgent, HunterAgent,
 )
 
 __all__ = [
@@ -23,6 +24,9 @@ __all__ = [
     "SimpleHiderAgent",
     "DefensiveHiderAgent",
     "MobileDefenseAgent",
+    "DodgerAgent",
+    "SniperAgent",
+    "HunterAgent",
 ]
 
 AGENT_REGISTRY = {
@@ -37,6 +41,9 @@ AGENT_REGISTRY = {
     "simplehider": SimpleHiderAgent,
     "hider":       DefensiveHiderAgent,
     "mobile":      MobileDefenseAgent,
+    "dodger":      DodgerAgent,
+    "sniper":      SniperAgent,
+    "hunter":      HunterAgent,
 }
 
 MAP1_AGENTS = {
@@ -54,10 +61,13 @@ MAP2_AGENTS = {
     "SimpleHider": SimpleHiderAgent,
     "Hider":       DefensiveHiderAgent,
     "Mobile":      MobileDefenseAgent,
+    "Dodger":      DodgerAgent,
+    "Sniper":      SniperAgent,
+    "Hunter":      HunterAgent,
 }
 # Curriculum order used by train.py; checkpoint v{X}_stage_{i}_final.zip was trained against STAGE_NAMES[map][i].
 STAGE_NAMES = {
     "map1": ["random", "chaser", "circler", "selfplay"],
     "map2": ["random", "stationary", "walker", "aggwalker", "strafer",
-             "simplehider", "hider", "mobile", "selfplay"],
+             "simplehider", "hider", "mobile", "dodger", "sniper", "hunter", "selfplay"],
 }

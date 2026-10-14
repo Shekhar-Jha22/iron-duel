@@ -43,6 +43,9 @@ AGENT_REGISTRY = {
     },
 }
 PPO_VARIATION = os.environ.get("PPO_VARIATION", "v1")
+# Pinned weights per map (others pick a checkpoint via _ppo_checkpoint).
+# map2: end of the bot ladder (stage 10, hunter), before self-play turned it passive.
+DEPLOYED_PPO = {"map2": "models/map2/v1_stage_10_final.npz"}
 _model_cache = {}
 
 
@@ -79,8 +82,7 @@ def _policy(path):
 
 def _load_ppo(map_id, opponent, team):
     agent = PPOAgent(team=team)
-    # path = _ppo_checkpoint(map_id, _effective_name(opponent, map_id))
-    path = "models/map2/v1_stage_8_final.npz"
+    path = DEPLOYED_PPO.get(map_id) or _ppo_checkpoint(map_id, _effective_name(opponent, map_id))
     if path is None:
         print(f"⚠ No PPO checkpoint for {map_id} (run tools/export_policies.py)")
         return agent
