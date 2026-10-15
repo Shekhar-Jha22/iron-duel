@@ -1,5 +1,15 @@
 import numpy as np
 
+# Policies trained on the 74-dim observation (before the peek/duel block): that layout is the
+# current one minus features 73..93, so it can be sliced out of a 95-dim observation.
+LEGACY_DIM, CURRENT_DIM = 74, 95
+
+
+def adapt_obs(obs, obs_dim):
+    if obs.size == CURRENT_DIM and obs_dim == LEGACY_DIM:
+        return np.concatenate([obs[:73], obs[-1:]])
+    return obs
+
 
 class NumpyPolicy:
     """Torch-free inference for an SB3 PPO MlpPolicy (tanh MLP → MultiDiscrete logits).
@@ -17,7 +27,7 @@ class NumpyPolicy:
         self.rng = np.random.default_rng()
 
     def predict(self, obs, deterministic=False):
-        h = np.asarray(obs, dtype=np.float32).reshape(-1)
+        h = adapt_obs(np.asarray(obs, dtype=np.float32).reshape(-1), self.obs_dim)
         for w, b in self.layers:
             h = np.tanh(w @ h + b)
         logits = self.wa @ h + self.ba

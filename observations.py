@@ -19,14 +19,19 @@ BULLET_LOCAL   = 300.0   # px scale for bullet-relative positions
 MAX_LEAD_T     = 100.0   # ticks; beyond this, aim directly
 MAX_SHOT_T     = 100.0
 
-# Layout (74):
+# Layout (95):
 #   self      10  pos(2) vel(2) hp ammo cd reload aim(2)
 #   opponent  12  rel(2) dist bearing(2) vel(2) hp ammo cd threat_aim los
 #   aim        6  lead_dir(2) lead_err(2) on_target can_fire
 #   bullets   29  4 × [present rel(2) dir(2) t_ca miss] + max_danger
 #   rays      16  free distance along the 16 aim directions
+#   los_near   8  per move direction: line of sight to the opponent after a 40px step that way
+#   los_far    8  same after a 100px step (where cover / a peek spot is within reach)
+#   duel       5  opp aim error to me (cos, sin), opp can_fire, opp reload, my hp lead
 #   time       1  fraction of episode remaining
-OBS_DIM = 10 + 12 + 6 + N_BULLETS * BULLET_FEATS + 1 + N_RAYS + 1
+N_PEEK = 8
+PEEK_DISTS = (40.0, 100.0)
+OBS_DIM = 10 + 12 + 6 + N_BULLETS * BULLET_FEATS + 1 + N_RAYS + 2 * N_PEEK + 5 + 1
 
 _RAY_DIRS = np.array([[math.cos(i * math.pi / 8), math.sin(i * math.pi / 8)]
                       for i in range(N_RAYS)])
@@ -35,6 +40,10 @@ _RAY_DIRS[np.abs(_RAY_DIRS) < 1e-9] = 1e-12   # slab method needs nonzero compon
 # Player 1 observes in a 180°-rotated frame (both maps are point-symmetric),
 # so one policy serves both spawns. Actions produced from obs(1) must be mapped back.
 _MOVE_ROT180 = np.array([0, 5, 6, 7, 8, 1, 2, 3, 4])
+
+
+_MOVE_UNIT = [(0.0, 0.0)] + [(dx / math.hypot(dx, dy), dy / math.hypot(dx, dy))
+                             for dx, dy in ((0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1))]
 
 
 def to_world_action(action, agent_idx):
@@ -201,6 +210,26 @@ def build_observation(env, agent_idx, _c=None):
         free = np.roll(free, -N_RAYS // 2)   # canonical ray k = world ray k+8
     o[i:i + N_RAYS] = free
     i += N_RAYS
+
+    # peek / cover probes along each canonical move direction 1..8, at two step lengths
+    for h, step in enumerate(PEEK_DISTS):
+        for c in range(1, N_PEEK + 1):
+            ux, uy = _MOVE_UNIT[_MOVE_ROT180[c] if agent_idx == 1 else c]
+            qx = min(max(p.x + ux * step, PLAYER_RADIUS), W - PLAYER_RADIUS)
+            qy = min(max(p.y + uy * step, PLAYER_RADIUS), H - PLAYER_RADIUS)
+            o[i + h * N_PEEK + c - 1] = 1.0 if (not obstacles or
+                                                has_line_of_sight(qx, qy, opp.x, opp.y, obstacles)) else 0.0
+    i += 2 * N_PEEK
+
+    # duel state: how the opponent's gun relates to me (rotation-invariant angles)
+    opp_err = wrap(opp.aim_angle - math.atan2(-dy, -dx))
+    o[i:i + 5] = (
+        math.cos(opp_err), math.sin(opp_err),
+        1.0 if (opp.ammo > 0 and opp.shoot_cd == 0) else 0.0,
+        opp.reload_tick / RELOAD_TICKS,
+        (p.health - opp.health) / MAX_HEALTH,
+    )
+    i += 5
 
     o[i] = 1.0 - env.step_count / env.max_steps
     return np.clip(o, -1.0, 1.0)

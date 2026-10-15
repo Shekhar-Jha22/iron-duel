@@ -69,5 +69,5 @@ MAP2_AGENTS = {
 STAGE_NAMES = {
     "map1": ["random", "chaser", "circler", "selfplay"],
     "map2": ["random", "stationary", "walker", "aggwalker", "strafer",
-             "simplehider", "hider", "mobile", "dodger", "sniper", "hunter", "selfplay"],
+             "simplehider", "hider", "mobile", "dodger", "sniper", "hunter", "mixed"],
 }

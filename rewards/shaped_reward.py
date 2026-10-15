@@ -35,6 +35,10 @@ class ShapedReward(BaseReward):
     R_SHOT_GOOD  =  0.15   # fired with a predicted hit
     R_SHOT_BAD   = -0.05   # fired with no predicted hit
     R_SHOT_BLIND = 0.0     # extra cost for firing with no line of sight
+    R_WIN_FAST   = 0.0     # extra win bonus × fraction of the episode still left
+    # Aim term as a cost instead of a bonus: R_AIM_TRACK × (q − 1). Perfect aim is free, sloppy aim
+    # costs every frame — and because it is never positive it can't make stalling attractive.
+    AIM_PENALTY  = False
 
     # ── potential weights ─────────────────────────────────────────────────
     W_AIM    = 1.0   # Φ ∝ cos(lead error), only with LOS
@@ -70,6 +74,7 @@ class ShapedReward(BaseReward):
         if self.env is not None:
             remaining = max(self.env.max_steps - self.env.step_count, 0)
             self.rewards[target_idx] += (self.R_STEP + self.R_DIST) * remaining
+            self.rewards[agent_idx] += self.R_WIN_FAST * remaining / self.env.max_steps
 
     def on_death(self, agent_idx):
         pass
@@ -133,7 +138,8 @@ class ShapedReward(BaseReward):
                 dist = math.hypot(opponent.x - player.x, opponent.y - player.y)
                 self.rewards[agent_idx] += self.R_DIST * dist / diag
             if self.R_AIM_TRACK:
-                self.rewards[agent_idx] += self.R_AIM_TRACK * self._aim_quality(player, opponent, obstacles, self._bs())
+                q = self._aim_quality(player, opponent, obstacles, self._bs())
+                self.rewards[agent_idx] += self.R_AIM_TRACK * ((q - 1.0) if self.AIM_PENALTY else q)
             if player.shoot_cd == SHOOT_COOLDOWN:   # fired this tick
                 good = shot_on_target(player, opponent, obstacles, self._bs())
                 self.rewards[agent_idx] += self.R_SHOT_GOOD if good else self.R_SHOT_BAD

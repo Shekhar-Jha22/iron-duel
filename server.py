@@ -16,11 +16,14 @@ from agents import (
     DefensiveHiderAgent, 
     StationaryAgent,
     MobileDefenseAgent,
+    DodgerAgent,
+    SniperAgent,
+    HunterAgent,
     MAP1_AGENTS,
     MAP2_AGENTS,
     STAGE_NAMES,
 )
-from agents.numpy_policy import NumpyPolicy
+from agents.numpy_policy import LEGACY_DIM, NumpyPolicy
 from observations import OBS_DIM
 from rewards import REWARDS
 from auth import login_required, register_auth_routes, verify_token
@@ -40,12 +43,15 @@ AGENT_REGISTRY = {
     "map2": {
         "hider": DefensiveHiderAgent,
         "mobile": MobileDefenseAgent,
+        "dodger": DodgerAgent,
+        "sniper": SniperAgent,
+        "hunter": HunterAgent,
     },
 }
 PPO_VARIATION = os.environ.get("PPO_VARIATION", "v1")
 # Pinned weights per map (others pick a checkpoint via _ppo_checkpoint).
-# map2: end of the bot ladder (stage 10, hunter), before self-play turned it passive.
-DEPLOYED_PPO = {"map2": "models/map2/v1_stage_10_final.npz"}
+# map2: v3 run (95-dim obs, aim-cost reward, bot ladder + weakness-weighted mixed stage), best eval.
+DEPLOYED_PPO = {"map2": "models/map2/v3_best.npz"}
 _model_cache = {}
 
 
@@ -73,7 +79,7 @@ def _policy(path):
     """Load (and cache) a torch-free policy; None if it was trained on a different obs layout."""
     if path not in _model_cache:
         pol = NumpyPolicy(path)
-        if pol.obs_dim != OBS_DIM:
+        if pol.obs_dim not in (OBS_DIM, LEGACY_DIM):
             print(f"⚠ skipping {path}: obs {pol.obs_dim} ≠ current {OBS_DIM} (retrain)")
             pol = None
         _model_cache[path] = pol
